@@ -1,4 +1,4 @@
-# SRT Importer Plugin for AviUtl 2
+# SRT Importer ExMultiLine Plugin for AviUtl 2
 
 このプラグインは、AviUtl ExEdit2でSRT字幕ファイルをインポートするためのプラグインです。本体の使い方については公式HPを参照してください。
 
@@ -7,18 +7,19 @@
 
 ## 機能
 
-- SRTファイルを参照して、テキストオブジェクトとして指定レイヤーにインポートできます。現在、文字のエンコーディングはUTF-8/CRLFのみ対応しています。
-- AviUtl ExEdit2 beta24aにて起動確認しています。
+- SRTファイルを参照して、テキストオブジェクトとして指定レイヤーにインポートできます。文字のエンコーディングはUTF-8、改行コードはCRLF/CR/LFに対応しています。
+- 字幕の複数行表示（1つの字幕ブロック内での改行）に対応しています。
+- AviUtl ExEdit2 beta32にて起動確認しています。
 
 ## 使用方法
 
-1. Releaseページから、SrtImporter.aux2をダウンロードしてください
+1. Releaseページから、`SrtImporter_ex.aux2`（またはビルド時に指定した名前の `.aux2`）をダウンロードしてください
 2. プラグインをAviUtlにインストールします。インストール方法は、環境によって異なりますが、多くの場合上記ファイルを次の位置にコピーして起動するだけです。
 
-    SrtImporter.aux2を次の位置にコピー<br>
+    `SrtImporter_ex.aux2` を次の位置にコピー<br>
     ```C:\ProgramData\aviutl2\Plugin```
 
-3. 本体を起動し、「表示」から「SRT Importer」をチェックを入れます。次のような画面になります。
+3. 本体を起動し、「表示」から「SRT Importer ExMultiLine」をチェックを入れます。次のような画面になります。
 
     <img src="./images/gui_image_001.png" alt="GUIの説明画像">
 
@@ -30,13 +31,13 @@
 ## 対応形式
 
 - 文字エンコーディング: UTF-8
-- 改行コード: CRLF
+- 改行コード: CRLF / CR / LF
 - 時間形式: 00:00:00,000
 
 ## 注意事項
 
 - 時刻からフレームへの変換は切り捨てられます。
-- CR/LF混在のファイルには対応していません。
+- 改行コードの混在（CRLF/CR/LF）でも読み込み可能です。
 - GUIからの設定はインポート時に適用されます。
 
 ## ビルド
@@ -90,3 +91,35 @@ tasks.json
   ]
 }
 ```
+
+### Dockerでビルド（ホストにCMake不要）
+
+このリポジトリには `docker/Dockerfile` を用意しています。  
+Docker Desktop があれば、Windows側に CMake や MinGW を入れなくても `.aux2` を生成できます。
+
+1. ビルド用イメージを作成
+
+```powershell
+docker build -t srtimporter-build -f docker/Dockerfile .
+```
+
+2. コンテナ内でビルド実行（リポジトリを `/work` にマウント）
+
+```powershell
+docker run --rm -v "${PWD}:/work" -w /work srtimporter-build
+```
+
+生成物:
+
+- `build-docker/SrtImporter_ex.aux2`
+
+出力ファイル名を変更したい場合（拡張子は自動で `.aux2`）:
+
+```powershell
+cmake -S . -B build-docker -DSRTIMPORTER_OUTPUT_NAME=YourPluginName
+cmake --build build-docker --config Release
+```
+
+補足:
+
+- `SDK/plugin2.h` と `SDK/logger2.h` が存在することが前提です。

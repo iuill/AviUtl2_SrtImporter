@@ -15,7 +15,7 @@
 #include "logger2.h"
 
 // SRTインポート + 設定UI付き実装
-// 前提: UTF-8/CRLFのみ対応。時間→フレームは切り捨て。
+// 前提: UTF-8対応。改行コードは CRLF/CR/LF に対応。時間→フレームは切り捨て。
 
 static HOST_APP_TABLE* g_host = nullptr;
 static EDIT_HANDLE* g_edit = nullptr;
@@ -88,7 +88,7 @@ EXTERN_C __declspec(dllexport) void RegisterPlugin(HOST_APP_TABLE* host) {
     g_host = host;
     if (!g_host) return;
 
-    g_host->set_plugin_information(L"SRT Importer");
+    g_host->set_plugin_information(L"SRT Importer ExMultiLine");
 
     // プロジェクト操作用ハンドル
     g_edit = g_host->create_edit_handle();
@@ -96,15 +96,15 @@ EXTERN_C __declspec(dllexport) void RegisterPlugin(HOST_APP_TABLE* host) {
     // インポートメニューを登録 (ファイル→インポート)
     g_host->register_import_menu(L"Import SRT", on_import_menu);
 
-    // 設定メニュー (設定→SRT Importer)
-    g_host->register_config_menu(L"SRT Importer Settings", on_config_menu);
+    // 設定メニュー (設定→SRT Importer ExMultiLine)
+    g_host->register_config_menu(L"SRT Importer ExMultiLine Settings", on_config_menu);
 
     // 独自ウィンドウクライアント
     register_window_client();
 }
 
 //---------------------------------------------------------------------
-// SRTパース (UTF-8/CRLF前提)
+// SRTパース (UTF-8 + CRLF/CR/LF対応)
 //---------------------------------------------------------------------
 static double parse_time_to_seconds(const std::string& s) {
     // 00:00:00,000 フォーマット
@@ -137,17 +137,34 @@ static std::vector<SrtEntry> parse_srt(const std::wstring& path, int rate, int s
     }
     data = data.substr(pos);
 
-    // CRLF前提。CRを除去してLFでsplit
-    std::string cleaned;
-    cleaned.reserve(data.size());
-    for (char c : data) if (c != '\r') cleaned.push_back(c);
+    // 改行コードを LF に正規化 (CRLF / CR / LF すべて許容)
+    std::string normalized;
+    normalized.reserve(data.size());
+    for (size_t idx = 0; idx < data.size(); ++idx) {
+        char c = data[idx];
+        if (c == '\r') {
+            normalized.push_back('\n');
+            if (idx + 1 < data.size() && data[idx + 1] == '\n') {
+                ++idx; // CRLF の LF を読み飛ばす
+            }
+        } else {
+            normalized.push_back(c);
+        }
+    }
 
     std::vector<std::string> lines;
-    std::stringstream ss(cleaned);
+    std::stringstream ss(normalized);
     std::string line;
     while (std::getline(ss, line, '\n')) {
         lines.push_back(line);
     }
+
+    auto is_blank_line = [](const std::string& s) {
+        for (unsigned char ch : s) {
+            if (!std::isspace(ch)) return false;
+        }
+        return true;
+    };
 
     size_t i = 0;
     auto to_frame = [&](double sec) -> int {
@@ -156,15 +173,23 @@ static std::vector<SrtEntry> parse_srt(const std::wstring& path, int rate, int s
     };
 
     while (i < lines.size()) {
-        // インデックス行をスキップ（内容は使わない）
-        if (lines[i].empty()) { i++; continue; }
-        i++;
+        // 先頭の空行をスキップ
+        while (i < lines.size() && is_blank_line(lines[i])) i++;
         if (i >= lines.size()) break;
+
+        // インデックス行は任意。時刻行でなければ1行だけ読み飛ばして次を時刻行として試す。
+        if (lines[i].find("-->") == std::string::npos) {
+            i++;
+            if (i >= lines.size()) break;
+        }
 
         // 時刻行
         const auto& tl = lines[i];
         auto arrow = tl.find("-->");
-        if (arrow == std::string::npos) { i++; continue; }
+        if (arrow == std::string::npos) {
+            while (i < lines.size() && !is_blank_line(lines[i])) i++;
+            continue;
+        }
         std::string start_str = tl.substr(0, arrow);
         std::string end_str = tl.substr(arrow + 3);
         // trim spaces
@@ -178,9 +203,9 @@ static std::vector<SrtEntry> parse_srt(const std::wstring& path, int rate, int s
         double end_sec = parse_time_to_seconds(end_str);
         i++;
 
-        // テキスト行
+        // テキスト行 (複数行字幕に対応)
         std::string text;
-        while (i < lines.size() && !lines[i].empty()) {
+        while (i < lines.size() && !is_blank_line(lines[i])) {
             if (!text.empty()) text += '\n';
             text += lines[i];
             i++;
@@ -223,7 +248,7 @@ static void handle_import(HWND owner) {
         auto entries = parse_srt(*path_ptr, edit->info->rate, edit->info->scale);
         if (entries.empty()) {
             if (g_logger) g_logger->warn(g_logger, L"SRT parse failed or empty");
-            MessageBox(edit->info ? nullptr : nullptr, L"SRTの内容が空か、読み込みに失敗しました。(UTF-8/CRLFのみ対応)", L"SRT Import", MB_OK | MB_ICONWARNING);
+            MessageBox(edit->info ? nullptr : nullptr, L"SRTの内容が空か、読み込みに失敗しました。(UTF-8のみ対応)", L"SRT Import", MB_OK | MB_ICONWARNING);
             return;
         }
         Settings cfg_local = read_settings_from_ui();
@@ -241,7 +266,7 @@ static void on_import_menu(EDIT_SECTION* edit) {
 // 設定メニュー (注意書き表示のみ)
 //---------------------------------------------------------------------
 static void on_config_menu(HWND hwnd, HINSTANCE dll_hinst) {
-    MessageBox(hwnd, L"SRT Importer\n- UTF-8/CRLF のみ対応\n- 時刻→フレームは切り捨て\n- ウィンドウからレイヤー/色/位置を設定してください", L"SRT Importer", MB_OK | MB_ICONINFORMATION);
+    MessageBox(hwnd, L"SRT Importer ExMultiLine\n- UTF-8 + 改行CRLF/CR/LF に対応\n- 複数行字幕に対応\n- 時刻→フレームは切り捨て\n- ウィンドウからレイヤー/色/位置を設定してください", L"SRT Importer ExMultiLine", MB_OK | MB_ICONINFORMATION);
     (void)dll_hinst;
 }
 
@@ -261,6 +286,77 @@ static bool set_item_w(EDIT_SECTION* edit, OBJECT_HANDLE obj, LPCWSTR effect, LP
     return edit->set_object_item_value(obj, effect, item, utf8.c_str());
 }
 
+// テキスト設定向けに改行を正規化する。
+// - 実改行(CRLF/CR/LF)は LF に統一
+// - エスケープ改行(\n, \N, \r, \r\n) は実改行(LF)に変換
+// - エスケープされたバックスラッシュ(\\)は維持
+static std::string normalize_text_value(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (c == '\r') {
+            out.push_back('\n');
+            if (i + 1 < s.size() && s[i + 1] == '\n') ++i;
+            continue;
+        }
+        if (c == '\n') {
+            out.push_back('\n');
+            continue;
+        }
+        if (c == '\\' && i + 1 < s.size()) {
+            char n = s[i + 1];
+            if (n == '\\') {
+                out.push_back('\\');
+                ++i;
+                continue;
+            }
+            if (n == 'n' || n == 'N') {
+                out.push_back('\n');
+                ++i;
+                continue;
+            }
+            if (n == 'r') {
+                out.push_back('\n');
+                ++i;
+                if (i + 2 < s.size() && s[i + 1] == '\\' && (s[i + 2] == 'n' || s[i + 2] == 'N')) {
+                    i += 2; // \r\n 形式をまとめて1改行へ
+                }
+                continue;
+            }
+        }
+        out.push_back(c);
+    }
+    return out;
+}
+
+// API値に含めるため、実改行を \n へエスケープ
+static std::string escape_text_value_newline(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (c == '\\') {
+            out.push_back('\\');
+            out.push_back('\\');
+            continue;
+        }
+        if (c == '\r') {
+            if (i + 1 < s.size() && s[i + 1] == '\n') ++i;
+            out.push_back('\\');
+            out.push_back('n');
+            continue;
+        }
+        if (c == '\n') {
+            out.push_back('\\');
+            out.push_back('n');
+            continue;
+        }
+        out.push_back(c);
+    }
+    return out;
+}
+
 static void apply_entries_to_timeline(const std::vector<SrtEntry>& entries, const Settings& cfg, EDIT_SECTION* edit) {
     const int target_layer = std::max(0, cfg.layer - 1); // UIは1始まり、APIは0始まり
     for (const auto& e : entries) {
@@ -270,6 +366,30 @@ static void apply_entries_to_timeline(const std::vector<SrtEntry>& entries, cons
         if (!obj) {
             if (g_logger) g_logger->warn(g_logger, L"create_object_from_alias failed");
             continue;
+        }
+        std::string text_value = normalize_text_value(e.text_utf8);
+        bool set_ok = set_item(edit, obj, L"テキスト", L"テキスト", text_value);
+        if (!set_ok) {
+            if (g_logger) g_logger->warn(g_logger, L"set_object_item_value(text, raw newline) failed");
+            continue;
+        }
+
+        // 実改行が反映されない環境向けに、必要時のみ \n 形式で再設定を試す
+        if (text_value.find('\n') != std::string::npos) {
+            const char* got = edit->get_object_item_value(obj, L"テキスト", L"テキスト");
+            bool has_multiline_hint = false;
+            if (got) {
+                std::string current(got);
+                has_multiline_hint = (current.find('\n') != std::string::npos)
+                    || (current.find("\\n") != std::string::npos)
+                    || (current.find("\\N") != std::string::npos);
+            }
+            if (!has_multiline_hint) {
+                std::string escaped = escape_text_value_newline(text_value);
+                if (!set_item(edit, obj, L"テキスト", L"テキスト", escaped)) {
+                    if (g_logger) g_logger->warn(g_logger, L"set_object_item_value(text, escaped newline) failed");
+                }
+            }
         }
     }
 }
@@ -329,34 +449,12 @@ static Settings read_settings_from_ui() {
 // alias生成: テキスト + 標準描画 + 縁取り
 //---------------------------------------------------------------------
 static std::string build_alias(const SrtEntry& e, const Settings& cfg) {
+    (void)e; // テキスト本体は create 後に set_object_item_value で設定する
     // 数値は少数2桁程度に丸めて文字列化
     auto num_to_str = [](double v) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%.2f", v);
         return std::string(buf);
-    };
-    auto to_crlf = [](const std::string& s) {
-        std::string out;
-        out.reserve(s.size() + 8);
-        for (size_t i = 0; i < s.size(); i++) {
-            char c = s[i];
-            if (c == '\n') {
-                if (i > 0 && s[i - 1] == '\r') {
-                    out.push_back('\n');
-                } else {
-                    out.push_back('\r');
-                    out.push_back('\n');
-                }
-            } else if (c != '\r') {
-                out.push_back(c);
-            }
-        }
-        // 末尾に改行が無ければCRLFを追加
-        if (out.empty() || out.back() != '\n') {
-            out.push_back('\r');
-            out.push_back('\n');
-        }
-        return out;
     };
 
     std::ostringstream oss;
@@ -373,7 +471,8 @@ static std::string build_alias(const SrtEntry& e, const Settings& cfg) {
             oss << "フォント=" << font_utf8 << "\r\n";
         }
     }
-    oss << "テキスト=" << to_crlf(e.text_utf8);
+    // 改行を含む本文は create 後に set_object_item_value で設定する。
+    oss << "テキスト=\r\n";
 
     // Object.1 標準描画 (位置)
     oss << "[Object.1]\r\n";
@@ -425,7 +524,7 @@ static LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpar
         SendMessage(g_ui.checkOutline, BM_SETCHECK, BST_CHECKED, 0);
         y += h + gap;
 
-        CreateWindowExW(0, L"STATIC", L"※UTF-8/CRLFのみ対応", WS_CHILD | WS_VISIBLE, x, y, 200, h, hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
+        CreateWindowExW(0, L"STATIC", L"※UTF-8 / 改行CRLF・CR・LF対応", WS_CHILD | WS_VISIBLE, x, y, 260, h, hwnd, nullptr, GetModuleHandle(nullptr), nullptr);
         y += h + gap;
 
         CreateWindowExW(0, L"BUTTON", L"Import SRT...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -460,11 +559,11 @@ static void register_window_client() {
     auto hwnd = CreateWindowExW(
         0,
         kClassName,
-        L"SRT Importer",
+        L"SRT Importer ExMultiLine",
         WS_POPUP, // register_window_clientでWS_CHILDが付与される
         CW_USEDEFAULT, CW_USEDEFAULT, 340, 320,
         nullptr, nullptr, GetModuleHandle(nullptr), nullptr);
     if (!hwnd) return;
 
-    g_host->register_window_client(L"SRT Importer", hwnd);
+    g_host->register_window_client(L"SRT Importer ExMultiLine", hwnd);
 }

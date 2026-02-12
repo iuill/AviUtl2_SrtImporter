@@ -22,9 +22,19 @@ target_link_libraries(SrtImporter PRIVATE user32 comdlg32)
 # Optional: ensure wide-char APIs are the default
 target_compile_definitions(SrtImporter PRIVATE UNICODE _UNICODE)
 
+# For MinGW builds, link libgcc/libstdc++ statically to avoid extra runtime DLL dependencies.
+option(SRTIMPORTER_STATIC_MINGW_RUNTIME "Link MinGW runtime statically" ON)
+if(MINGW AND SRTIMPORTER_STATIC_MINGW_RUNTIME)
+    target_link_options(SrtImporter PRIVATE -static-libgcc -static-libstdc++)
+endif()
+
+# Output file name (without extension) can be overridden from cmake configure.
+# Example: -DSRTIMPORTER_OUTPUT_NAME=SrtImporter_ex
+set(SRTIMPORTER_OUTPUT_NAME "SrtImporter_ex" CACHE STRING "Output plugin filename without extension")
+
 # Build the DLL with .aux2 extension to match AviUtl plugin convention
 set_target_properties(SrtImporter PROPERTIES
-    OUTPUT_NAME "SrtImporter"
+    OUTPUT_NAME "${SRTIMPORTER_OUTPUT_NAME}"
     SUFFIX ".aux2"
     PREFIX ""
 )
